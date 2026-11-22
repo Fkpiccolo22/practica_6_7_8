@@ -1,3 +1,4 @@
+from decimal import Decimal
 import os
 import psycopg
 
@@ -12,7 +13,7 @@ conn = psycopg.connect(
 def escape_val(v):
     if v is None:
         return "null"
-    if isinstance(v, (int, float)):
+    if isinstance(v, (int, float, Decimal)):
         return str(v)
     s = str(v).replace("'", "''")
     return f"'{s}'"
