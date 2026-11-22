@@ -9,69 +9,71 @@ conn = psycopg.connect(
     password=os.getenv("PGPASSWORD", "postgres"),
 )
 
-
-def fmt_val(v):
+def escape_val(v):
     if v is None:
         return "null"
     if isinstance(v, (int, float)):
         return str(v)
-    texto = str(v).replace("'", "''")
-    return f"'{texto}'"
-
+    s = str(v).replace("'", "''")
+    return f"'{s}'"
 
 def fetch_rows(cur, sql, params=None):
     cur.execute(sql, params or ())
-    cols = [desc[0] for desc in cur.description]
-    rows = cur.fetchall()
-    return cols, rows
-
+    cols = [d[0] for d in cur.description]
+    return cols, cur.fetchall()
 
 def format_relation(name, cols, rows):
-    lines = [f"{name} = {{", "  " + ", ".join(cols)]
-    for r in rows:
-        lines.append("  " + ", ".join(fmt_val(v) for v in r))
-    lines.append("}")
-    return "\n".join(lines)
-
+    header = f"{name} = {{\n  " + ", ".join(cols)
+    body = "\n".join("  " + ", ".join(escape_val(v) for v in r) for r in rows)
+    return f"{header}\n{body}\n}}" if body else f"{header}\n}}"
 
 with conn:
     with conn.cursor() as cur:
-        # 1. Catalogo de categorias
-        cat_cat_cols, cat_cat_rows = fetch_rows(cur, """
-            SELECT id_categoria, nombre
-            FROM categoria_catalogo
-            ORDER BY id_categoria
-            LIMIT 20
-        """)
-        cat_ids = [r[0] for r in cat_cat_rows] or ["''"]
-
-        # 2. Productos
-        prod_cols, prod_rows = fetch_rows(cur, """
-            SELECT cod_barra, nombre, marca, precio
-            FROM productos
-            ORDER BY cod_barra
-            LIMIT 20
-        """)
-        cods = [r[0] for r in prod_rows] or ["''"]
-
-        # 3. Relacion producto-categoria (respetando los ids exportados)
-        cat_cols, cat_rows = fetch_rows(cur, """
-            SELECT cod_barra, identificador
-            FROM categoria
-            WHERE cod_barra = ANY(%s) AND identificador = ANY(%s)
+        # 1. Muestra base de incluir (25 filas) para garantizar integridad referencial
+        inc_cols, inc_rows = fetch_rows(cur, """
+            SELECT ticket, cod_barra
+            FROM incluir
+            ORDER BY ticket, cod_barra
             LIMIT 25
-        """, (cods, cat_ids))
-
-        # 4. Ventas (ya normalizada, sin empleadoventas)
-        venta_cols, venta_rows = fetch_rows(cur, """
-            SELECT ticket, identificador_cliente, identificador_empleado, total, dia, mes, anio
-            FROM venta
-            ORDER BY ticket
-            LIMIT 20
         """)
-        tickets = [r[0] for r in venta_rows] or ["''"]
+        inc_tickets = list(dict.fromkeys(r[0] for r in inc_rows))
+        inc_cods = list(dict.fromkeys(r[1] for r in inc_rows))
 
-        # 5. Detalle incluir (respetando tickets y cod_barra exportados)
+        # 2. Productos (los de incluir + extra hasta completar 20)
+        prod_cols, prod_rows = fetch_rows(cur, """
+            (SELECT * FROM productos WHERE cod_barra = ANY(%s))
+            UNION
+            (SELECT * FROM productos ORDER BY cod_barra LIMIT 20)
+            LIMIT 20
+        """, (inc_cods or [""],))
+        cods = [r[0] for r in prod_rows] or [""]
+
+        # 3. Categorias asociadas a esos productos
+        cat_cols, cat_rows = fetch_rows(cur, """
+            SELECT * FROM categoria
+            WHERE cod_barra = ANY(%s)
+            LIMIT 25
+        """, (cods,))
+        cat_ids = list(dict.fromkeys(r[1] for r in cat_rows)) or [""]
+
+        # 4. Catalogo de categorias (las usadas + extra hasta completar 15)
+        cat_cat_cols, cat_cat_rows = fetch_rows(cur, """
+            (SELECT * FROM categoria_catalogo WHERE id_categoria = ANY(%s))
+            UNION
+            (SELECT * FROM categoria_catalogo ORDER BY id_categoria LIMIT 15)
+            LIMIT 15
+        """, (cat_ids,))
+
+        # 5. Ventas (las de incluir + extra hasta completar 20)
+        venta_cols, venta_rows = fetch_rows(cur, """
+            (SELECT * FROM venta WHERE ticket = ANY(%s))
+            UNION
+            (SELECT * FROM venta ORDER BY ticket LIMIT 20)
+            LIMIT 20
+        """, (inc_tickets or [""],))
+        tickets = [r[0] for r in venta_rows] or [""]
+
+        # Re-filtrar incluir por los tickets y productos efectivamente exportados
         inc_cols, inc_rows = fetch_rows(cur, """
             SELECT ticket, cod_barra
             FROM incluir
@@ -93,3 +95,4 @@ with open(out_path, "w", encoding="utf-8") as f:
     f.write("\n\n".join(blocks) + "\n")
 
 print(f"Listo: se genero {out_path}")
+print(f"Conteo -> categoria_catalogo: {len(cat_cat_rows)}, productos: {len(prod_rows)}, categoria: {len(cat_rows)}, venta: {len(venta_rows)}, incluir: {len(inc_rows)}")
