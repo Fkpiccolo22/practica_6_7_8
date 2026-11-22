@@ -73,7 +73,7 @@ with conn:
 
         # 5. Detalle incluir (respetando tickets y cod_barra exportados)
         inc_cols, inc_rows = fetch_rows(cur, """
-            SELECT ticket, cod_barra, cantidad
+            SELECT ticket, cod_barra
             FROM incluir
             WHERE ticket = ANY(%s) AND cod_barra = ANY(%s)
             LIMIT 25
