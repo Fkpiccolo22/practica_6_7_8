@@ -1,0 +1,30 @@
+services:
+  db:
+    image: postgres:18-alpine
+    container_name: db_practica_678
+    env_file:
+      - .env.example
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  runner:
+    build: ./runner
+    container_name: runner_practica_678
+    env_file:
+      - .env.example
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./salida:/app/salida
+
+volumes:
+  pgdata:
